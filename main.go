@@ -10,27 +10,11 @@ import (
 	"time"
 )
 
-
 type incoming_conn struct {
 	Conn net.Conn
 	MsgIds map[int]Stratum_command_msg
 	ConnId int
 	Subscriptions map[string]struct{}
-}
-
-type cache_resp struct {
-	CacheOK bool
-	CacheVal string
-}
-
-type cache_req struct {
-	stcmd Stratum_command_msg
-	retChan chan cache_resp
-}
-
-type cache_load struct {
-	StCmdMsg Stratum_command_msg
-	Resp string
 }
 
 type server_out struct {
@@ -48,114 +32,7 @@ type CommHub struct {
 	ServerOut chan server_out
 }
 
-type unspent_cache struct {
-	Data string
-	ExpTime int
-}
 
-func GetCacheKey(i interface{}) (string, bool) {
-	switch p := i.(type) {
-	case []interface{}:
-		if len(p) == 1 {
-			switch q := p[0].(type) {
-			case string:
-				return q, true
-			}
-		}
-	}
-	return "", false
-}
-
-func CacheManager(ch *CommHub) {
-	TransactionCache := make(map[interface{}]string)
-	UnspentCache := make(map[interface{}]unspent_cache)
-	NumBlocks := 0
-	for {
-		select {
-		case cr := <-ch.CacheReq:
-			resp := cache_resp{false, ""}
-			scm := cr.stcmd
-			key, keyok := GetCacheKey(scm.Params)
-			switch scm.Method {
-			case "blockchain.transaction.get":
-				if keyok {
-					cached_data, ok := TransactionCache[key]
-					if ok {
-						log.Println("Data in Cache:", strings.TrimSpace(cached_data))
-						resp = cache_resp{true, cached_data}
-					}
-				}
-			case "blockchain.address.listunspent":
-				if keyok {
-					cached_data, ok := UnspentCache[key]
-					if ok {
-						log.Println("Data in Cache:", strings.TrimSpace(cached_data.Data))
-						if cached_data.ExpTime < int(time.Now().Unix()) {
-							log.Println("Data in Cache Expired:", int(time.Now().Unix()) - cached_data.ExpTime)
-						} else {
-							resp = cache_resp{true, cached_data.Data}
-						}
-					}
-				}
-			case "blockchain.numblocks.subscribe":
-				sr := Stratum_command_resp{
-					Id: 1,
-					Result: NumBlocks,
-				}
-				msg, err := json.Marshal(sr)
-				if err != nil {
-					log.Fatal("json error numblock subscription", err)
-				}
-				resp = cache_resp{true, string(msg)}
-			}
-			cr.retChan <-resp
-		case cl := <-ch.CacheLoad:
-			key, keyok := GetCacheKey(cl.StCmdMsg.Params)
-			switch cl.StCmdMsg.Method {
-			case "blockchain.transaction.get":
-				if keyok {
-					TransactionCache[key] = cl.Resp
-				}
-			case "blockchain.address.listunspent":
-				if keyok {
-					exptime := int(time.Now().Unix()) + 5*60 //5 min exp time
-					unsp_data := unspent_cache{cl.Resp, exptime}
-					UnspentCache[key] = unsp_data
-				}
-			case "blockchain.numblocks.subscribe":
-				switch p := cl.StCmdMsg.Params.(type) {
-				case []interface{}:
-					switch q := p[0].(type) {
-					case int:
-						NumBlocks = q
-					}
-				}
-			}
-		}
-	}
-}
-
-func checkCache(stcmd Stratum_command_msg, ch *CommHub) cache_resp {
-	switch stcmd.Method {
-	case "blockchain.transaction.get", "blockchain.address.listunspent", "blockchain.numblocks.subscribe":
-		log.Println("Checking Cache for Method:", stcmd.Method)
-		cacheRespChan := make(chan cache_resp)
-		ch.CacheReq <-cache_req{stcmd, cacheRespChan}
-		CacheResp := <-cacheRespChan
-		return CacheResp
-	default:
-		log.Println("Cache not enabled for method:", stcmd.Method)
-		return cache_resp{false, ""}
-	}
-}
-
-func loadCache(stcmd Stratum_command_msg, resp string, ch *CommHub) {
-	switch stcmd.Method {
-	case "blockchain.transaction.get", "blockchain.address.listunspent", "blockchain.numblocks.subscribe":
-		log.Println("Add to Cache", strings.TrimSpace(resp))
-		ch.CacheLoad <- cache_load{stcmd, resp}
-	}
-}
 
 func serverRespHandler(ch *CommHub) {
 	for {
@@ -322,7 +199,11 @@ func main () {
 		log.Fatal("error listening", err)
 	}
 	defer ln.Close()
-	go CacheManager(&commhub)
+	cacheExpTime, err := time.ParseDuration("5m")
+	if err != nil {
+		log.Fatal("Cache Exp Time Parse Failure")
+	}
+	go CacheManager(&commhub, cacheExpTime)
 	go outgoingConn(outConn, &commhub)
 	go outgoingConnResp(outConn, &commhub)
 	go serverRespHandler(&commhub)

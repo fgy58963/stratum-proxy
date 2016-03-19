@@ -10,40 +10,10 @@ import (
 	"time"
 )
 
-type stratum_command_msg struct {
-	Id int `json:"id"`
-	Params interface{} `json:"params"`
-	Method string `json:"method"`
-}
-
-func (scm *stratum_command_msg) FromJsonString(in_string string) {
-	err := json.Unmarshal([]byte(strings.TrimSpace(in_string)), scm)
-	if err != nil {
-		log.Println("stratum_command_msg error")
-		log.Println("Error:", err)
-		log.Fatal("Error decoding json string")
-	}
-}
-
-type stratum_command_resp struct {
-	Id int `json:"id"`
-	Result interface{} `json:"result"`
-	Params interface{} `json:"params"`
-	Method string `json:"method"`
-}
-
-func (scr *stratum_command_resp) FromJsonString(in_string string) {
-	err := json.Unmarshal([]byte(strings.TrimSpace(in_string)), scr)
-	if err != nil {
-		log.Println("stratum_command_msg error")
-		log.Println("Error:", err)
-		log.Fatal("Error decoding json string")
-	}
-}
 
 type incoming_conn struct {
 	Conn net.Conn
-	MsgIds map[int]stratum_command_msg
+	MsgIds map[int]Stratum_command_msg
 	ConnId int
 	Subscriptions map[string]struct{}
 }
@@ -54,17 +24,17 @@ type cache_resp struct {
 }
 
 type cache_req struct {
-	stcmd stratum_command_msg
+	stcmd Stratum_command_msg
 	retChan chan cache_resp
 }
 
 type cache_load struct {
-	StCmdMsg stratum_command_msg
+	StCmdMsg Stratum_command_msg
 	Resp string
 }
 
 type server_out struct {
-	strat_cmd stratum_command_msg
+	strat_cmd Stratum_command_msg
 	ping bool
 	incConn incoming_conn
 }
@@ -128,7 +98,7 @@ func CacheManager(ch *CommHub) {
 					}
 				}
 			case "blockchain.numblocks.subscribe":
-				sr := stratum_command_resp{
+				sr := Stratum_command_resp{
 					Id: 1,
 					Result: NumBlocks,
 				}
@@ -165,7 +135,7 @@ func CacheManager(ch *CommHub) {
 	}
 }
 
-func checkCache(stcmd stratum_command_msg, ch *CommHub) cache_resp {
+func checkCache(stcmd Stratum_command_msg, ch *CommHub) cache_resp {
 	switch stcmd.Method {
 	case "blockchain.transaction.get", "blockchain.address.listunspent", "blockchain.numblocks.subscribe":
 		log.Println("Checking Cache for Method:", stcmd.Method)
@@ -179,7 +149,7 @@ func checkCache(stcmd stratum_command_msg, ch *CommHub) cache_resp {
 	}
 }
 
-func loadCache(stcmd stratum_command_msg, resp string, ch *CommHub) {
+func loadCache(stcmd Stratum_command_msg, resp string, ch *CommHub) {
 	switch stcmd.Method {
 	case "blockchain.transaction.get", "blockchain.address.listunspent", "blockchain.numblocks.subscribe":
 		log.Println("Add to Cache", strings.TrimSpace(resp))
@@ -191,10 +161,10 @@ func serverRespHandler(ch *CommHub) {
 	for {
 		select {
 		case m := <-ch.ServerIn:
-			var s stratum_command_resp
+			var s Stratum_command_resp
 			s.FromJsonString(m)
 			if s.Method == "blockchain.numblocks.subscribe" {
-				stcmdmsg := stratum_command_msg{1, s.Params, s.Method}
+				stcmdmsg := Stratum_command_msg{1, s.Params, s.Method}
 				loadCache(stcmdmsg, m, ch)
 				for _, n := range ch.IncomingConns {
 					_, found := n.Subscriptions["blockchain.numblocks.subscribe"]
@@ -239,11 +209,11 @@ func handleConnection(inConn incoming_conn, ch *CommHub) {
 			return
 		}
 		if len(message) > 0 {
-			var stratCmd stratum_command_msg
+			var stratCmd Stratum_command_msg
 			stratCmd.FromJsonString(message)
 			if stratCmd.Method == "server.version" {
 				log.Println("Client version message")
-				sr := stratum_command_resp{
+				sr := Stratum_command_resp{
 					Id: stratCmd.Id,
 					Result: "1.0",
 				}
@@ -256,7 +226,7 @@ func handleConnection(inConn incoming_conn, ch *CommHub) {
 				if already_sub {
 					CacheResp := checkCache(stratCmd, ch)
 					if CacheResp.CacheOK {
-						var sr stratum_command_resp
+						var sr Stratum_command_resp
 						sr.FromJsonString(CacheResp.CacheVal)
 						sr.Id = stratCmd.Id
 						newMsg, err := json.Marshal(sr)
@@ -276,7 +246,7 @@ func handleConnection(inConn incoming_conn, ch *CommHub) {
 			log.Println("Params:", stratCmd.Params)
 			CacheResp := checkCache(stratCmd, ch)
 			if CacheResp.CacheOK {
-				var sr stratum_command_resp
+				var sr Stratum_command_resp
 				sr.FromJsonString(CacheResp.CacheVal)
 				sr.Id = stratCmd.Id
 				newMsg, err := json.Marshal(sr)
@@ -295,7 +265,7 @@ func ServerPing(ch *CommHub) {
 	ticker := time.NewTicker(time.Minute)
 	for range ticker.C {
 		log.Println("Sending Server Ping (version message)")
-		stratCmd := stratum_command_msg{1, []string{""}, "server.version"}
+		stratCmd := Stratum_command_msg{1, []string{""}, "server.version"}
 		ch.ServerOut <- server_out{stratCmd, true, incoming_conn{}}
 	}
 }
@@ -365,7 +335,7 @@ func main () {
 		}
 		var incConn = incoming_conn {
 			Conn: conn,
-			MsgIds: make(map[int]stratum_command_msg),
+			MsgIds: make(map[int]Stratum_command_msg),
 			ConnId: connId,
 			Subscriptions: make(map[string]struct{}),
 		}
